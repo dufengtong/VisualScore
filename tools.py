@@ -1,5 +1,8 @@
 import cv2
 import numpy as np
+from colormath.color_objects import sRGBColor, LabColor
+from colormath.color_conversions import convert_color
+from colormath.color_diff import delta_e_cie2000
 
 def videoToImageset(video_path, image_set_path, interval):
     """This function is for generating frames from a video with specified time interval between two frames,
@@ -42,6 +45,7 @@ def luminance(image, target_width, target_height):
 
     return luma
 
+
 def lumaDifference(luma1, luma2):
     """
     Return the difference between two luminance array
@@ -64,6 +68,19 @@ def averageLuma(luma, block_num):
         for j in range(width):
             block = luma[i*block_h : (i+1)*block_h, j*block_w : (j+1)*block_w]
             luma_block[i, j] = block.sum() / block.size
+    return luma_block
+
+def averageLuma3Block(luma, block_num):
+    """
+    Return an array of average luma with block size
+    """
+    luma_block = np.zeros(block_num)
+    block_w = int(luma.shape[1])
+    block_h = int(luma.shape[0] / block_num)
+
+    for i in range(block_num):
+            block = luma[i*block_h : (i+1)*block_h, :]
+            luma_block[i] = block.sum() / block.size
     return luma_block
 
 def uncomfortBlockNum(luma_block_diff, threshold):
@@ -89,6 +106,7 @@ def imEvalue(image1_path, image2_path, block_num, threshold,
     uncomfort_block_num = uncomfortBlockNum(block_luma_diff, threshold)
     return uncomfort_block_num, block_luma_diff
 
+
 def videoEvalue(frame1, frame2, block_num, threshold,
              target_width, target_height):
     # compute pixel wise luminance of two images
@@ -107,3 +125,54 @@ def videoEvalue(frame1, frame2, block_num, threshold,
     return uncomfort_block_num, block_luma_diff
 
 
+def videoColorEvalue(frame1, frame2, block_num, threshold):
+    image1 = cv2.resize(frame1, (15, 15))
+    image2 = cv2.resize(frame2, (15, 15))
+
+    assert image1.shape == image2.shape
+
+    delta_image = image1[:,:,0]
+
+    # compute pixel wise CIE color difference between two images
+    for i in range(image1.shape[0]):
+        for j in range(image1.shape[1]):
+            rgb_color1 = sRGBColor(image1[i, j, 2] / 255.0, image1[i, j, 1] / 255.0, image1[i, j, 0] / 255.0)
+            lab_color1 = convert_color(rgb_color1, LabColor)
+            rgb_color2 = sRGBColor(image2[i, j, 2] / 255.0, image2[i, j, 1] / 255.0, image2[i, j, 0] / 255.0)
+            lab_color2 = convert_color(rgb_color2, LabColor)
+            delta_image[i,j] = delta_e_cie2000(lab_color1, lab_color2)
+    # compute average delta in each block
+    block_delta = averageLuma(delta_image, block_num)
+    # compute the number of uncomfortable blocks of two images
+    uncomfort_block_num = uncomfortBlockNum(block_delta, threshold)
+    return uncomfort_block_num, block_delta
+
+def video3BlockEvalue(frame1, frame2, threshold_array, target_width, target_height):
+    # return True if uncomfort
+    # average luminance in every block
+    block_num = 3
+    luma1 = luminance(frame1, target_width, target_height)
+    luma2 = luminance(frame2, target_width, target_height)
+    block_luma1 = averageLuma3Block(luma1, block_num)
+    block_luma2 = averageLuma3Block(luma2, block_num)
+    block_luma_diff = lumaDifference(block_luma1, block_luma2)
+
+    # average color delta in every block
+    image1 = cv2.resize(frame1, (15, 15))
+    image2 = cv2.resize(frame2, (15, 15))
+    assert image1.shape == image2.shape
+    delta_image = image1[:, :, 0]
+    # compute pixel wise CIE color difference between two images
+    for i in range(image1.shape[0]):
+        for j in range(image1.shape[1]):
+            rgb_color1 = sRGBColor(image1[i, j, 2] / 255.0, image1[i, j, 1] / 255.0, image1[i, j, 0] / 255.0)
+            lab_color1 = convert_color(rgb_color1, LabColor)
+            rgb_color2 = sRGBColor(image2[i, j, 2] / 255.0, image2[i, j, 1] / 255.0, image2[i, j, 0] / 255.0)
+            lab_color2 = convert_color(rgb_color2, LabColor)
+            delta_image[i, j] = delta_e_cie2000(lab_color1, lab_color2)
+
+    block_color_diff = averageLuma3Block(delta_image, block_num)
+
+    uncomfortBlockNum = np.sum(block_color_diff>threshold_array[3:]) + np.sum(block_luma_diff>threshold_array[:3])
+
+    return uncomfortBlockNum, block_luma_diff, block_color_diff
